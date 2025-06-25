@@ -8,15 +8,14 @@ def main():
     load_dotenv()
 
     #args:
-
+    
     verbose = "--verbose" in sys.argv
     args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
+    user_prompt = " ".join(args)
 
-    if not args:
+    if not user_prompt:
         print("Please, provide a prompt")
         sys.exit(1)
-    
-    user_prompt = " ".join(args)
 
     #Setting up the API and AI:
 
