@@ -1,98 +1,91 @@
-import os
 import sys
-from functions.config import system_prompt
-from dotenv import load_dotenv
+import os
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+
+from prompts import system_prompt
+from call_function import call_function, available_functions
+from functions.config import MAX_ITERS
+
 
 def main():
     load_dotenv()
 
-    #args:
-    
     verbose = "--verbose" in sys.argv
     args = [arg for arg in sys.argv[1:] if not arg.startswith("--")]
-    user_prompt = " ".join(args)
 
-    if not user_prompt:
-        print("Please, provide a prompt")
+    if not args:
+        print("AI Code Assistant")
+        print('\nUsage: python main.py "your prompt here" [--verbose]')
+        print('Example: python main.py "How do I fix the calculator?"')
         sys.exit(1)
-
-    #Setting up the API and AI:
 
     api_key = os.environ.get("GEMINI_API_KEY")
     client = genai.Client(api_key=api_key)
 
-    #List of messages:
+    user_prompt = " ".join(args)
+
+    if verbose:
+        print(f"User prompt: {user_prompt}\n")
 
     messages = [
         types.Content(role="user", parts=[types.Part(text=user_prompt)]),
     ]
 
-    #AI Answer:
-    model_name="gemini-2.0-flash-001"
+    iters = 0
+    while True:
+        iters += 1
+        if iters > MAX_ITERS:
+            print(f"Maximum iterations ({MAX_ITERS}) reached.")
+            sys.exit(1)
 
-    schema_get_files_info = types.FunctionDeclaration(
-        name="get_files_info",
-        description="Lists files in the specified directory along with their sizes, constrained to the working directory.",
-        parameters=types.Schema(
-            type=types.Type.OBJECT,
-            properties={
-                "directory": types.Schema(
-                    type=types.Type.STRING,
-                    description="The directory to list files from, relative to the working directory. If not provided, lists files in the working directory itself.",
-                ),
-            },
+        try:
+            final_response = generate_content(client, messages, verbose)
+            if final_response:
+                print("Final response:")
+                print(final_response)
+                break
+        except Exception as e:
+            print(f"Error in generate_content: {e}")
+
+
+def generate_content(client, messages, verbose):
+    response = client.models.generate_content(
+        model="gemini-2.0-flash-001",
+        contents=messages,
+        config=types.GenerateContentConfig(
+            tools=[available_functions], system_instruction=system_prompt
         ),
     )
-
-    # schema_get_file_content = types.FunctionDeclaration(
-    #     name="get_file_content",
-    #     description="Returns content of a file in a specified directory, up to 1000 bites",
-    #     parameters=types.Schema(
-    #         type=types.Type.OBJECT,
-    #         properties={
-    #             "file_path": types.Schema(
-    #                 type=types.Type.STRING,
-    #                 description="Relative path to a file from which we want to get content"
-    #             )
-    #         }
-    #     )
-
-    available_functions = types.Tool(
-        function_declarations=[
-            schema_get_files_info,
-            ]
-        )
-
-    
-
-
-    response = client.models.generate_content(
-    model=model_name,
-    contents=messages,
-    config=types.GenerateContentConfig(
-    tools=[available_functions], system_instruction=system_prompt))
-
-
-    #Output:
-
-    #Check for function calls:
-    if response.function_calls != None:
-        print(f"Calling function: {response.function_calls[0].name}({response.function_calls[0].args})")
-    else:
-        print(response.text)
-
-    #Check for flags:
-
     if verbose:
-        print(f"User prompt: {user_prompt}")
-        print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-        print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+        print("Response tokens:", response.usage_metadata.candidates_token_count)
 
-    
+    if response.candidates:
+        for candidate in response.candidates:
+            function_call_content = candidate.content
+            messages.append(function_call_content)
 
+    if not response.function_calls:
+        return response.text
 
+    function_responses = []
+    for function_call_part in response.function_calls:
+        function_call_result = call_function(function_call_part, verbose)
+        if (
+            not function_call_result.parts
+            or not function_call_result.parts[0].function_response
+        ):
+            raise Exception("empty function call result")
+        if verbose:
+            print(f"-> {function_call_result.parts[0].function_response.response}")
+        function_responses.append(function_call_result.parts[0])
+
+    if not function_responses:
+        raise Exception("no function responses generated, exiting.")
+
+    messages.append(types.Content(role="tool", parts=function_responses))
 
 
 if __name__ == "__main__":
